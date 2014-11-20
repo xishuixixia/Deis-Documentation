@@ -26,6 +26,7 @@ Deis系统文档在翻译校对完成后将会发布到DockerOne上，同时我�
 * image 镜像
 * Docker registry 不翻译
 * scheduler 调度器
+* Components 组件
 
 
 
