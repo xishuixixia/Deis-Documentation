@@ -8,13 +8,13 @@ Deis系统文档在翻译校对完成后将会发布到DockerOne上，同时我�
 
 **2. 翻译成员**
 -----------
-
-* 格式<kurtzhong520@gmail.com> 
+参与翻译可以加入QQ群275206160，我们通过Tower以及GitHub协作，并有专业人员负责审校和传播，社区味十足。
+* 格式（kurtzhong520@gmail.com>）
 * kurtz
 * amwtke
 * Sean
 * zyx
-* 夕水溪下<Gary@infoq.com>
+* 夕水溪下（Gary@infoq.com）
 
 **3. 常用术语**
 -----------
@@ -26,5 +26,7 @@ Deis系统文档在翻译校对完成后将会发布到DockerOne上，同时我�
 * image 镜像
 * Docker registry 不翻译
 * scheduler 调度器
+
+
 
  
