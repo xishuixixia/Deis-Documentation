@@ -1,0 +1,243 @@
+大多数的组件都能很好的处理新机器加入的情况。然而当机器从集群中被移除的时候需要留意，因为deis的存储（store）组件充当着后端存储的作用，Deis所有有状态性的数据都存在其中，这些数据是Deis正常运行的保障。
+
+请留意这些说明遵循Ceph文档中的[删除监控(removing monitors)](http://ceph.com/docs/giant/rados/operations/add-or-rm-mons/#removing-monitors)和删除OSD(removing OSDs)的部分。假如这些说明与Ceph的文档有明显的出入，应该优先以Ceph的文档为准，并且我们十分感激你能给我们提交一个更新文档的pull request。
+
+因为Ceph使用的时Paxos算法，在集群中有足够多的监控器（monitors）以达到大多数（majority）的状态至关重要。可以是1：1，2：3， 3：4， 4：6等等。推荐尽可能在删除一个老的节点之前，先把新的节点添加进集群。
+
+本文档将会假定一个三节点集群的情况。我们将会添加第四个节点到集群中，然后删除第一个节点。
+
+检测健康状态
+----------
+
+在我们开始之前，我们应该检查Ceph集群的状态，保证其状态是正常的。我们可以登录到集群中的任意机器上，进入一个存储（store）容器，然后查询Ceph的状态：
+
+```bash
+core@deis-1 ~ $ nse deis-store-monitor
+root@deis-1:/# ceph -s
+    cluster 20038e38-4108-4e79-95d4-291d0eef2949
+     health HEALTH_OK
+     monmap e3: 3 mons at {deis-1=172.17.8.100:6789/0,deis-2=172.17.8.101:6789/0,deis-3=172.17.8.102:6789/0}, election epoch 16, quorum 0,1,2 deis-1,deis-2,deis-3
+     mdsmap e10: 1/1/1 up {0=deis-2=up:active}, 2 up:standby
+     osdmap e36: 3 osds: 3 up, 3 in
+      pgmap v2096: 1344 pgs, 12 pools, 369 MB data, 448 objects
+            24198 MB used, 23659 MB / 49206 MB avail
+            1344 active+clean
+
+```
+
+从pgmap那一部分可以看到我们有1344个安置组（placement groups）,并且全部都处于active（激活）+clean（干净）的状态。好极了！
+
+
+添加一个节点
+-----------
+要添加一个节点到Deis集群，只需要配置一个新的CoreOS机器，在cloud-config文件中制定同样的etcd探索路径。你可以运行`fleetctl list-machines`来进行确认。
+
+因为存储（store）组件是全局的单元（unit）,他们会自动的在新的节点上启动。
+
+一旦新的机器开始运行，我们可以再次检测Ceph集群的健康状态：
+
+```bash
+root@deis-1:/# ceph -s
+    cluster 20038e38-4108-4e79-95d4-291d0eef2949
+     health HEALTH_WARN 4 pgs recovering; 7 pgs recovery_wait; 31 pgs stuck unclean; recovery 325/1353 objects degraded (24.021%); clock skew detected on mon.deis-4
+     monmap e4: 4 mons at {deis-1=172.17.8.100:6789/0,deis-2=172.17.8.101:6789/0,deis-3=172.17.8.102:6789/0,deis-4=172.17.8.103:6789/0}, election epoch 20, quorum 0,1,2,3 deis-1,deis-2,deis-3,deis-4
+     mdsmap e11: 1/1/1 up {0=deis-2=up:active}, 3 up:standby
+     osdmap e40: 4 osds: 4 up, 4 in
+      pgmap v2172: 1344 pgs, 12 pools, 370 MB data, 451 objects
+            29751 MB used, 34319 MB / 65608 MB avail
+            325/1353 objects degraded (24.021%)
+              88 active
+               7 active+recovery_wait
+            1245 active+clean
+               4 active+recovering
+  recovery io 2302 kB/s, 2 objects/s
+  client io 204 B/s wr, 0 op/s
+```
+留意我们处在`HEALTH_WARN`的状态，并且我们有安置组正在修复。Ceph正在向新节点拷贝数据。在它完成之前我们可以一直查询其状态。然后，我们会看到如下状态：
+
+```bash
+root@deis-1:/# ceph -s
+    cluster 20038e38-4108-4e79-95d4-291d0eef2949
+     health HEALTH_OK
+     monmap e4: 4 mons at {deis-1=172.17.8.100:6789/0,deis-2=172.17.8.101:6789/0,deis-3=172.17.8.102:6789/0,deis-4=172.17.8.103:6789/0}, election epoch 20, quorum 0,1,2,3 deis-1,deis-2,deis-3,deis-4
+     mdsmap e11: 1/1/1 up {0=deis-2=up:active}, 3 up:standby
+     osdmap e40: 4 osds: 4 up, 4 in
+      pgmap v2216: 1344 pgs, 12 pools, 372 MB data, 453 objects
+            29749 MB used, 34324 MB / 65608 MB avail
+                1344 active+clean
+  client io 409 B/s wr, 0 op/s
+```
+
+状态又恢复成了`HEALTH_OK`，并且注意以下的部分：
+
+```bash
+
+monmap e4: 4 mons at {deis-1=172.17.8.100:6789/0,deis-2=172.17.8.101:6789/0,deis-3=172.17.8.102:6789/0,deis-4=172.17.8.103:6789/0}, election epoch 20, quorum 0,1,2,3 deis-1,deis-2,deis-3,deis-4
+mdsmap e11: 1/1/1 up {0=deis-2=up:active}, 3 up:standby
+osdmap e40: 4 osds: 4 up, 4 in
+
+```
+
+我们有四个监控器，OSD，和元数据服务器！Hooray!
+
+注意：
+如果你用了自定义的防火墙脚本，你应该再次运行这个脚本，并且重启你的节点以让iptables删除重复的条目。
+
+删除一个节点
+----------
+当从一个运行着deis存储组件的集群中删除一个节点的时候，你应该告诉Ceph这个主机上的存储服务即将从集群中移除。在这个例子中，我们将会把第一个节点deis-1移除。该主机的IP地址为172.17.8.100。
+
+### 删除一个OSD
+
+在我们通知Ceph去移除一个OSD之前，我们需要得到OSD的ID。我们可以通过从etcd中得到：
+
+```bash
+core@deis-2 ~ $ etcdctl get /deis/store/osds/172.17.8.100
+2
+```
+
+注意：在一些情形下，我们可能不知道主机的IP地址或者主机名，如果这样我们可以使用`ceph osd tree`来查看当前集群的状况。这会列出集群中所有的OSD，并且报告出哪些主机已经离线。
+
+
+现在我们有了OSD的ID，让我们开始移除的工作吧。我们需要处在集群中的一个存储容器的终端（除开我们正要移除的这个主机）。在这个例子中，我将使用`deis-2`主机。
+
+```bash
+core@deis-2 ~ $ nse deis-store-monitor
+root@deis-2:/# ceph osd out 2
+marked out osd.2.
+```
+
+这会让Ceph开始把安置组从哪个OSD移动到另外一个主机上。我们可以使用`ceph -w`查看这个过程：
+
+```
+root@deis-2:/# ceph -w
+    cluster 20038e38-4108-4e79-95d4-291d0eef2949
+     health HEALTH_WARN 4 pgs recovery_wait; 151 pgs stuck unclean; recovery 654/1365 objects degraded (47.912%); clock skew detected on mon.deis-4
+     monmap e4: 4 mons at {deis-1=172.17.8.100:6789/0,deis-2=172.17.8.101:6789/0,deis-3=172.17.8.102:6789/0,deis-4=172.17.8.103:6789/0}, election epoch 20, quorum 0,1,2,3 deis-1,deis-2,deis-3,deis-4
+     mdsmap e11: 1/1/1 up {0=deis-2=up:active}, 3 up:standby
+     osdmap e42: 4 osds: 4 up, 3 in
+     pgmap v2259: 1344 pgs, 12 pools, 373 MB data, 455 objects
+            23295 MB used, 24762 MB / 49206 MB avail
+            654/1365 objects degraded (47.912%)
+             151 active
+               4 active+recovery_wait
+            1189 active+clean
+  recovery io 1417 kB/s, 1 objects/s
+  client io 113 B/s wr, 0 op/s
+
+2014-11-04 06:45:07.940731 mon.0 [INF] pgmap v2260: 1344 pgs: 142 active, 3 active+recovery_wait, 1199 active+clean; 373 MB data, 23301 MB used, 24757 MB / 49206 MB avail; 619/1365 objects degraded (45.348%); 1724 kB/s, 0 keys/s, 1 objects/s recovering
+2014-11-04 06:45:17.948788 mon.0 [INF] pgmap v2261: 1344 pgs: 141 active, 4 active+recovery_wait, 1199 active+clean; 373 MB data, 23301 MB used, 24757 MB / 49206 MB avail; 82 B/s rd, 0 op/s; 619/1365 objects degraded (45.348%); 843 kB/s, 0 keys/s, 0 objects/s recovering
+2014-11-04 06:45:18.962420 mon.0 [INF] pgmap v2262: 1344 pgs: 140 active, 5 active+recovery_wait, 1199 active+clean; 373 MB data, 23318 MB used, 24740 MB / 49206 MB avail; 371 B/s rd, 0 B/s wr, 0 op/s; 618/1365 objects degraded (45.275%); 0 B/s, 0 keys/s, 0 objects/s recovering
+2014-11-04 06:45:23.347089 mon.0 [INF] pgmap v2263: 1344 pgs: 130 active, 5 active+recovery_wait, 1209 active+clean; 373 MB data, 23331 MB used, 24727 MB / 49206 MB avail; 379 B/s rd, 0 B/s wr, 0 op/s; 572/1365 objects degraded (41.905%); 2323 kB/s, 0 keys/s, 4 objects/s recovering
+2014-11-04 06:45:37.970125 mon.0 [INF] pgmap v2264: 1344 pgs: 129 active, 4 active+recovery_wait, 1211 active+clean; 373 MB data, 23336 MB used, 24722 MB / 49206 MB avail; 568/1365 objects degraded (41.612%); 659 kB/s, 2 keys/s, 1 objects/s recovering
+2014-11-04 06:45:40.006110 mon.0 [INF] pgmap v2265: 1344 pgs: 129 active, 4 active+recovery_wait, 1211 active+clean; 373 MB data, 23336 MB used, 24722 MB / 49206 MB avail; 568/1365 objects degraded (41.612%); 11 B/s, 3 keys/s, 0 objects/s recovering
+2014-11-04 06:45:43.034215 mon.0 [INF] pgmap v2266: 1344 pgs: 129 active, 4 active+recovery_wait, 1211 active+clean; 373 MB data, 23344 MB used, 24714 MB / 49206 MB avail; 1010 B/s wr, 0 op/s; 568/1365 objects degraded (41.612%)
+2014-11-04 06:45:44.048059 mon.0 [INF] pgmap v2267: 1344 pgs: 129 active, 4 active+recovery_wait, 1211 active+clean; 373 MB data, 23344 MB used, 24714 MB / 49206 MB avail; 1766 B/s wr, 0 op/s; 568/1365 objects degraded (41.612%)
+2014-11-04 06:45:48.366555 mon.0 [INF] pgmap v2268: 1344 pgs: 129 active, 4 active+recovery_wait, 1211 active+clean; 373 MB data, 23345 MB used, 24713 MB / 49206 MB avail; 576 B/s wr, 0 op/s; 568/1365 objects degraded (41.612%)
+
+```
+
+最终，集群将会恢复成干净的状态。同时状态也会显示为`HEALTH_OK`。然后我们可以停止守护进程。因为存储单元是全局的单元，我们不能指定某一个让它停止，我们而是应该登进该主机并且告诉Docke停止该容器。
+
+小提示：请确保你登陆进的是你要从集群中移除的那个主机。
+
+```bash
+core@deis-1 ~ $ docker stop deis-store-daemon
+deis-store-daemon
+```
+
+回到deis-2主机上的存储容器，我们终于可以移除OSD了：
+
+```bash
+core@deis-2 ~ $ nse deis-store-monitor
+root@deis-2:/# ceph osd crush remove osd.2
+removed item id 2 name 'osd.2' from crush map
+root@deis-2:/# ceph auth del osd.2
+updated
+root@deis-2:/# ceph osd rm 2
+removed osd.2
+```
+
+同时作为清理工作，我们也应该吧OSD从etcd中删除。
+
+```bash
+core@deis-2 ~ $ etcdctl rm /deis/store/osds/172.17.8.100
+```
+
+搞定！如果我们现在检测健康状态，我们可以看到现在又有三个osd了。并且所有的安置组都是active+clean的状态。
+
+```bash
+core@deis-2 ~ $ nse deis-store-monitor
+root@deis-2:/# ceph -s
+    cluster 20038e38-4108-4e79-95d4-291d0eef2949
+     health HEALTH_OK
+     monmap e4: 4 mons at {deis-1=172.17.8.100:6789/0,deis-2=172.17.8.101:6789/0,deis-3=172.17.8.102:6789/0,deis-4=172.17.8.103:6789/0}, election epoch 20, quorum 0,1,2,3 deis-1,deis-2,deis-3,deis-4
+     mdsmap e11: 1/1/1 up {0=deis-2=up:active}, 3 up:standby
+     osdmap e46: 3 osds: 3 up, 3 in
+      pgmap v2338: 1344 pgs, 12 pools, 375 MB data, 458 objects
+            23596 MB used, 24465 MB / 49206 MB avail
+                1344 active+clean
+  client io 326 B/s wr, 0 op/s
+```
+
+#### 移除一个监控器（monitor）
+
+移除一个监控器容易的多。首先我们需要移除etcd中的条目，这样任何使用Ceph的客户端将不会使用该监控器来进行连接：
+
+```bash
+$ etcdctl rm /deis/store/hosts/172.17.8.100
+```
+
+在5秒内，confd将会在所有的存储客户端上运行，并且把该监控器从ceph.conf配置文件中删除。
+
+```
+core@deis-1 ~ $ docker stop deis-store-monitor
+deis-store-monitor
+```
+
+回到另一个主机，我们又可以进入一个存储容器然后移除这个监控器：
+
+```bash
+core@deis-2 ~ $ nse deis-store-monitor
+root@deis-2:/# ceph mon remove deis-1
+removed mon.deis-1 at 172.17.8.100:6789/0, there are now 3 monitors
+2014-11-04 06:57:59.712934 7f04bc942700  0 monclient: hunting for new mon
+2014-11-04 06:57:59.712934 7f04bc942700  0 monclient: hunting for new mon
+```
+
+注意接下来可能会报错，这种情形很正常，当Ceph客户端无法与一个监控器进行通信。重要的是我们需要看到`removed mon.deis-1 at 172.17.8.100:6789/0, there are now 3 monitors.`一行。
+
+最后，让我们检测集群的健康状态：
+
+```bash
+root@deis-2:/# ceph -s
+    cluster 20038e38-4108-4e79-95d4-291d0eef2949
+     health HEALTH_OK
+     monmap e5: 3 mons at {deis-2=172.17.8.101:6789/0,deis-3=172.17.8.102:6789/0,deis-4=172.17.8.103:6789/0}, election epoch 26, quorum 0,1,2 deis-2,deis-3,deis-4
+     mdsmap e17: 1/1/1 up {0=deis-4=up:active}, 3 up:standby
+     osdmap e47: 3 osds: 3 up, 3 in
+      pgmap v2359: 1344 pgs, 12 pools, 375 MB data, 458 objects
+            23605 MB used, 24455 MB / 49206 MB avail
+                1344 active+clean
+  client io 816 B/s wr, 0 op/s
+```
+
+搞定了！
+
+### 移除一个元数据（metadata）服务器
+
+和守护进程一样，我们将会停止元数据服务的容器。
+
+小提示：确保你登进去的主机是你要从集群中移除的主机。
+
+```bash
+core@deis-1 ~ $ docker stop deis-store-metadata
+deis-store-metadata
+```
+
+这就是唯一需要的一步。ceph提供了一个`ceph mds rm`命令。但是没有提供其文档，参见：
+http://docs.ceph.com/docs/giant/rados/operations/control/#mds-subsystem
+
+### 将主机从etcd中移除
+
+etcd集群仍然有我们已经删除的主机的条目，因此我们需要删除该条目。这可以通过像etcd API发送请求来完成。详情参考“移除主机（removing machines）”。
