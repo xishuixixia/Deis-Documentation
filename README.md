@@ -12,7 +12,7 @@ Deis系统文档在翻译校对完成后将会发布到DockerOne上，同时我�
 * kurtzh（kurtzhong520@gmail.com）
 * amwtke
 * Sean（sunlxy@yahoo.com）
-* zyx
+* zyx（zyx.today@gmail.com）
 * 叶小白（yekeqiang@gmail.com）
 * 夕水溪下（Gary@infoq.com）
 
