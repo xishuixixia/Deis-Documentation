@@ -1,1 +1,38 @@
   
+  
+平台日志
+--------
+
+对于平台的组件和部署的应用的日志由两个组件来处理：Logger和Logspout。
+
+deis-logspout运行在所有的CoreOS主机上，收集运行中的容器的日志然后将他们的日志发送到/deis/logs/host 和 /deis/logs/port。
+
+deis-logger收集由logspout发送来的日志然后将他们存档以备控制器组件的使用，和当客户端运行deis logs的时候使用。此组件将其主机和端口发送到/deis/logs/host和/deis/logs/port，通常是消费来自deis-logspout的日志的服务。
+
+### 将日志存放到自定义的地址
+
+将日志记录到外部的地址可以通过不修改Deis的日志工作流来达到 - 我们可以简单地用ncat来发送CoreOS主机上的主日志。例如，如果我正在使用Papertrail的日志服务，我可以使用Papertrail提供给我的主机地址和端口将一个主机上所有的日志转发到Papertrail。
+
+```
+$ journalctl -o short -f | ncat --udp logs2.papertrailapp.com 23654
+```
+
+这通常只有在我们我们以一个服务的形式交付，我们没有必要自己运行的时候才有用。我可以为此使用fleet服务：
+
+```
+[Unit]
+Description=Log forwarder
+
+[Service]
+ExecStart=/bin/sh -c "journalctl -o short -f | ncat --udp logs2.papertrailapp.com 23654"
+
+[Install]
+WantedBy=multi-user.target
+
+[X-Fleet]
+Global=true
+```
+
+将此文件保存为`log-forwarder.service`。用fleetctl load log-forwarder.service && fleetctl start log-forwarder.service加载并启动服务。
+
+很快，你应该开始看到来自你的集群每一个主机的日志出现在Papertrail的控制面板上。
