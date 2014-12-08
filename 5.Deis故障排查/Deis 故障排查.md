@@ -1,10 +1,12 @@
 # Deis 故障排查
 
-标签（空格分隔）： Deis Troubleshooting 
-
----
-
-[toc]
+本文汇总了用户在安装使用Deis时常见的一些问题。
+## 登录到集群
+Deis运行在CoreOS之上，所以连接它很简单，使用`ssh`即可。CoreOS默认的用户名是core，使用预分配SSH key即可登录集群。
+连接到具有公网ip的任意一个节点：
+```
+$ ssh core@deis-1.example.com -i ~/.ssh/deis.pub
+```
 
 ## deis-store 组件启动失败
 
